@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Интерактивная карта ИП</title>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      background: #f2f2f2;
+    }
+
+    #viewer {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+      background: #f2f2f2;
+    }
+
+    #mapLayer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 2048px;
+      height: 1356px; /* видимая часть карты, нижняя полоса скрыта */
+      overflow: hidden;
+      transform-origin: 0 0;
+    }
+
+    #mapImage {
+      width: 2048px;
+      height: 1448px;
+      display: block;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .point {
+      position: absolute;
+      background: transparent;
+      border: none;
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      box-sizing: border-box;
+      z-index: 10;
+    }
+
+    .point.circle {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+    }
+
+    .point.square {
+      width: 34px;
+      height: 34px;
+      border-radius: 4px;
+    }
+
+    .point.circle:hover,
+    .point.square:hover {
+      background: rgba(255, 230, 0, 0.22);
+      box-shadow:
+        0 0 0 5px rgba(255, 230, 0, 0.75),
+        0 0 24px rgba(255, 230, 0, 0.95);
+      z-index: 30;
+    }
+
+    #tooltip {
+      position: fixed;
+      display: none;
+      background: #ffffff;
+      color: #111;
+      padding: 12px 16px;
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+      z-index: 100;
+      font-size: 16px;
+      font-weight: 600;
+      pointer-events: none;
+      max-width: 360px;
+      line-height: 1.35;
+      white-space: nowrap;
+    }
+
+    .controls {
+      position: fixed;
+      left: 20px;
+      top: 20px;
+      z-index: 200;
+      display: flex;
+      gap: 8px;
+    }
+
+    .controls button {
+      border: none;
+      background: white;
+      padding: 10px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 18px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+    }
+
+    .controls button:hover {
+      background: #f7f7f7;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="tooltip"></div>
+
+<div class="controls">
+  <button onclick="zoomIn()">+</button>
+  <button onclick="zoomOut()">−</button>
+  <button onclick="resetView()">Сброс</button>
+</div>
+
+<div id="viewer">
+  <div id="mapLayer">
+    <img id="mapImage" src="map.png" alt="Карта ИП">
+  </div>
+</div>
+
+<script>
+  const MAP_WIDTH = 2048;
+  const FULL_MAP_HEIGHT = 1448;
+  const VISIBLE_MAP_HEIGHT = 1356; // нижняя надпись скрыта
+
+  const points = [
+    // КРАСНЫЕ — ожидание полного монтажа
+    { name: "Expert RS", x: 1156, y: 286, shape: "circle" },
+    { name: "Проект Гарант", x: 1613, y: 314, shape: "circle" },
+    { name: "Metiz Project", x: 292, y: 362, shape: "circle" },
+    { name: "Мос-Строй", x: 1733, y: 369, shape: "circle" },
+    { name: "KZ Prestige", x: 373, y: 382, shape: "circle" },
+    { name: "Интерпродукт Евразия", x: 1761, y: 394, shape: "circle" },
+    { name: "Маргметал", x: 245, y: 400, shape: "circle" },
+    { name: "Стройдормаш-Астана", x: 488, y: 407, shape: "circle" },
+    { name: "B Akan Corporation", x: 271, y: 433, shape: "circle" },
+    { name: "Центрпласт НС", x: 1836, y: 446, shape: "circle" },
+    { name: "Trust Invest", x: 1671, y: 446, shape: "circle" },
+    { name: "LED Solution", x: 366, y: 449, shape: "circle" },
+    { name: "ТОО Есиль Кз", x: 1653, y: 468, shape: "circle" },
+    { name: "Жанибек Нуржанат", x: 1228, y: 485, shape: "circle" },
+    { name: "Ал-Мар Строй", x: 1744, y: 510, shape: "circle" },
+    { name: "Баракат Инвест", x: 581, y: 563, shape: "circle" },
+    { name: "Selena CA", x: 1300, y: 601, shape: "circle" },
+    { name: "Madeira", x: 974, y: 775, shape: "circle" },
+    { name: "Ормаш", x: 1019, y: 779, shape: "circle" },
+    { name: "Stadler Kazakhstan", x: 1341, y: 981, shape: "circle" },
+    // ЗЕЛЁНЫЕ — действующие потребители
+    { name: "HAF KZ", x: 1516, y: 441, shape: "circle" },
+    { name: "Sadi-групп", x: 1122, y: 453, shape: "circle" },
+    { name: "DAT KZ, UNITON", x: 514, y: 599, shape: "circle" },
+    // КВАДРАТЫ — ГРПШ / ПГБ / АГНКС
+    { name: "ГРПШ", x: 1518, y: 498, shape: "square" },
+    { name: "АГНКС", x: 1780, y: 561, shape: "square" },
+    { name: "ПГБ", x: 1816, y: 589, shape: "square" },
+    { name: "ГРПШ", x: 1343, y: 611, shape: "square" },
+    { name: "ГРПШ", x: 516, y: 673, shape: "square" },
+    // КОРИЧНЕВЫЕ — прочие ИП
+    { name: "COCA-COLA", x: 1380, y: 334, shape: "circle" },
+    { name: "Модуль Сталь", x: 516, y: 349, shape: "circle" },
+    { name: "Капитал Бетон", x: 215, y: 376, shape: "circle" },
+    { name: "Optimus", x: 1192, y: 385, shape: "circle" },
+    { name: "Стеклянный дом", x: 542, y: 419, shape: "circle" },
+    { name: "JSN Holding", x: 651, y: 452, shape: "circle" },
+    { name: "Гипсовинил", x: 409, y: 464, shape: "circle" },
+    { name: "Karcher Service Astana", x: 243, y: 483, shape: "circle" },
+    { name: "Ztown Development", x: 286, y: 492, shape: "circle" },
+    { name: "Авалон", x: 209, y: 495, shape: "circle" },
+    { name: "HBK Инжиниринг склад", x: 234, y: 523, shape: "circle" },
+    { name: "KazParamount Engineering", x: 992, y: 540, shape: "circle" },
+    { name: "Mmk Мебель", x: 253, y: 549, shape: "circle" },
+    { name: "Коврочисты", x: 294, y: 551, shape: "circle" },
+    { name: "Танжер-1", x: 1222, y: 558, shape: "circle" },
+    { name: "Теплотехник-НС", x: 222, y: 578, shape: "circle" },
+    { name: "Смит Казахстан", x: 264, y: 581, shape: "circle" },
+    { name: "Stone Vita", x: 250, y: 605, shape: "circle" },
+    { name: "СТЗ Арыстан", x: 1386, y: 609, shape: "circle" },
+    { name: "Wood plus", x: 296, y: 615, shape: "circle" },
+    { name: "Akbarys Protection", x: 796, y: 635, shape: "circle" },
+    { name: "Asyl Qala", x: 1109, y: 636, shape: "circle" },
+    { name: "SMD Service", x: 1192, y: 657, shape: "circle" },
+    { name: "Аверс Swissgrow", x: 1337, y: 658, shape: "circle" },
+    { name: "KZOK", x: 378, y: 660, shape: "circle" },
+    { name: "Central Asia Pipes", x: 788, y: 686, shape: "circle" },
+    { name: "СПЕЦЭЛЕКТРА", x: 838, y: 695, shape: "circle" },
+    { name: "Оттовоск", x: 414, y: 695, shape: "circle" },
+    { name: "LS Group", x: 1166, y: 697, shape: "circle" },
+    { name: "Мир керамики", x: 1478, y: 702, shape: "circle" },
+    { name: "Eira Med", x: 726, y: 704, shape: "circle" },
+    { name: "Swissgrow", x: 1347, y: 708, shape: "circle" },
+    { name: "MPR Project", x: 1291, y: 711, shape: "circle" },
+    { name: "Orbis Heavy Machinery", x: 258, y: 727, shape: "circle" },
+    { name: "Эмити интернешнл", x: 1522, y: 737, shape: "circle" },
+    { name: "Iveco Service", x: 327, y: 739, shape: "circle" },
+    { name: "Astana Trade", x: 1479, y: 765, shape: "circle" },
+    { name: "СПП", x: 798, y: 768, shape: "circle" },
+    { name: "Artec Kaz", x: 1536, y: 768, shape: "circle" },
+    { name: "Etcom", x: 917, y: 790, shape: "circle" },
+    { name: "KazPan", x: 1594, y: 799, shape: "circle" },
+    { name: "N-cleaning", x: 252, y: 802, shape: "circle" },
+    { name: "Гидрокс", x: 988, y: 807, shape: "circle" },
+    { name: "KazBrand", x: 835, y: 820, shape: "circle" },
+    { name: "Navyco", x: 1632, y: 839, shape: "circle" },
+    { name: "Казахстан Aselsan Инжиниринг", x: 682, y: 844, shape: "circle" },
+    { name: "Kerim Plastic", x: 898, y: 851, shape: "circle" },
+    { name: "Avangard AstKZ", x: 1529, y: 855, shape: "circle" },
+    { name: "Warsaw", x: 252, y: 857, shape: "circle" },
+    { name: "Электровоз курастыру зауыты", x: 1214, y: 872, shape: "circle" },
+    { name: "AdalPromService", x: 970, y: 880, shape: "circle" },
+    { name: "Астана-резинатехникар", x: 872, y: 948, shape: "circle" },
+    { name: "Астана жиhаз салоны", x: 355, y: 955, shape: "circle" },
+    { name: "New Building Systems Kazakhstan", x: 769, y: 958, shape: "circle" },
+    { name: "Завод ВМП Астана", x: 252, y: 964, shape: "circle" },
+    { name: "HBP Group", x: 1115, y: 974, shape: "circle" },
+    { name: "Tausogar", x: 1225, y: 1001, shape: "circle" },
+    { name: "Hilti", x: 841, y: 1029, shape: "circle" },
+    { name: "DuyQaz", x: 402, y: 1030, shape: "circle" },
+    { name: "Polytech Astana", x: 1005, y: 1033, shape: "circle" },
+    { name: "Тау-Кен Алтын", x: 335, y: 1037, shape: "circle" },
+    { name: "Teplomax Kz", x: 1582, y: 1046, shape: "circle" },
+    { name: "ДСК LGB", x: 677, y: 1046, shape: "circle" },
+    { name: "Metal Former", x: 1137, y: 1065, shape: "circle" },
+    { name: "Digital System Servis", x: 1200, y: 1074, shape: "circle" },
+    { name: "3i Materials", x: 600, y: 1089, shape: "circle" },
+    { name: "MFA Interntional", x: 1089, y: 1098, shape: "circle" },
+    { name: "Seafood Group", x: 445, y: 1101, shape: "circle" },
+    { name: "CominvestGroup", x: 1264, y: 1112, shape: "circle" },
+    { name: "Spectrum Плюс", x: 1188, y: 1124, shape: "circle" },
+    { name: "Тулпар", x: 451, y: 1137, shape: "circle" },
+    { name: "ТОКК Казахстан", x: 377, y: 1153, shape: "circle" },
+    { name: "TAZAU", x: 598, y: 1159, shape: "circle" },
+    { name: "Единый консолидирующий центр", x: 1395, y: 1162, shape: "circle" },
+    { name: "Astana ютария ltd", x: 1322, y: 1163, shape: "circle" },
+    { name: "Modex", x: 781, y: 1176, shape: "circle" },
+    { name: "Jet Logistic, склад", x: 435, y: 1176, shape: "circle" },
+    { name: "Астанапром", x: 575, y: 1196, shape: "circle" },
+    { name: "KCG (ЖБИ), Epsilon Systems, Альянстелеком", x: 1576, y: 1201, shape: "circle" },
+    { name: "Bolashak Electric", x: 1177, y: 1206, shape: "circle" },
+    { name: "КМТСС", x: 1428, y: 1213, shape: "circle" }
+  ];
+
+  const viewer = document.getElementById("viewer");
+  const mapLayer = document.getElementById("mapLayer");
+  const tooltip = document.getElementById("tooltip");
+
+  let fitScale = 1;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 4;
+
+  function updateTransform() {
+    mapLayer.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+  }
+
+  function centerMapAtScale(targetScale) {
+    offsetX = (viewer.clientWidth - MAP_WIDTH * targetScale) / 2;
+    offsetY = (viewer.clientHeight - VISIBLE_MAP_HEIGHT * targetScale) / 2;
+  }
+
+  function fitMap() {
+    const scaleX = viewer.clientWidth / MAP_WIDTH;
+    const scaleY = viewer.clientHeight / VISIBLE_MAP_HEIGHT;
+
+    fitScale = Math.min(scaleX, scaleY);
+    scale = fitScale;
+
+    centerMapAtScale(scale);
+    updateTransform();
+  }
+
+  function zoomAt(clientX, clientY, zoomFactor) {
+    const newScale = Math.max(fitScale * MIN_ZOOM, Math.min(scale * zoomFactor, fitScale * MAX_ZOOM));
+
+    const rect = mapLayer.getBoundingClientRect();
+    const worldX = (clientX - rect.left) / scale;
+    const worldY = (clientY - rect.top) / scale;
+
+    offsetX = clientX - worldX * newScale;
+    offsetY = clientY - worldY * newScale;
+    scale = newScale;
+
+    updateTransform();
+  }
+
+  function zoomIn() {
+    const cx = viewer.clientWidth / 2;
+    const cy = viewer.clientHeight / 2;
+    zoomAt(cx, cy, 1.2);
+  }
+
+  function zoomOut() {
+    const cx = viewer.clientWidth / 2;
+    const cy = viewer.clientHeight / 2;
+    zoomAt(cx, cy, 1 / 1.2);
+  }
+
+  function resetView() {
+    scale = fitScale;
+    centerMapAtScale(scale);
+    updateTransform();
+  }
+
+  viewer.addEventListener("wheel", function(e) {
+    e.preventDefault();
+
+    if (e.deltaY < 0) {
+      zoomAt(e.clientX, e.clientY, 1.1);
+    } else {
+      zoomAt(e.clientX, e.clientY, 1 / 1.1);
+    }
+  }, { passive: false });
+
+  function addPoints() {
+    points.forEach(item => {
+      const point = document.createElement("div");
+      point.className = `point ${item.shape || "circle"}`;
+      point.style.left = item.x + "px";
+      point.style.top = item.y + "px";
+
+      point.addEventListener("mousemove", function(e) {
+        tooltip.style.display = "block";
+        tooltip.innerText = item.name;
+
+        let left = e.clientX + 15;
+        let top = e.clientY + 15;
+
+        if (left + tooltip.offsetWidth > window.innerWidth) {
+          left = e.clientX - tooltip.offsetWidth - 15;
+        }
+
+        if (top + tooltip.offsetHeight > window.innerHeight) {
+          top = e.clientY - tooltip.offsetHeight - 15;
+        }
+
+        tooltip.style.left = left + "px";
+        tooltip.style.top = top + "px";
+      });
+
+      point.addEventListener("mouseleave", function() {
+        tooltip.style.display = "none";
+      });
+
+      mapLayer.appendChild(point);
+    });
+  }
+
+  addPoints();
+  fitMap();
+
+  window.addEventListener("resize", fitMap);
+</script>
+
+</body>
+</html>
